@@ -21,8 +21,6 @@ connect to, and file to log to, e.g.:
 
 will log channel #test to the file 'test.log'.
 """
-
-
 # twisted imports
 from twisted.words.protocols import irc
 from twisted.internet import reactor, protocol
@@ -30,6 +28,7 @@ from twisted.python import log
 
 # system imports
 import time, sys
+
 
 
 class MessageLogger:
@@ -57,31 +56,33 @@ class LogBot(irc.IRCClient):
 
     def connectionMade(self):
         irc.IRCClient.connectionMade(self)
-        self.logger = MessageLogger(open(self.factory.filename, "a"))
-        self.logger.log("[connected at %s]" %
+        for channel in self.channels:
+            self.loghandles[channel] = MessageLogger(open(self.filename[channel], "a"))
+            self.loghandles[channel].log("[connected at %s]" %
                         time.asctime(time.localtime(time.time())))
 
     def connectionLost(self, reason):
         irc.IRCClient.connectionLost(self, reason)
-        self.logger.log("[disconnected at %s]" %
+        for channel in self.channels:
+            self.loghandles[channel].log("[disconnected at %s]" %
                         time.asctime(time.localtime(time.time())))
-        self.logger.close()
-
+            self.loghandles[channel].close()
 
     # callbacks for events
 
     def signedOn(self):
         """Called when bot has succesfully signed on to server."""
-        self.join(self.factory.channel)
+        for channel in self.factor.channels:
+            self.join(channel)
 
     def joined(self, channel):
         """This will get called when the bot joins the channel."""
-        self.logger.log("[I have joined %s]" % channel)
+        self.loghandles[channel].log("[I have joined %s]" % channel)
 
     def privmsg(self, user, channel, msg):
         """This will get called when the bot receives a message."""
         user = user.split('!', 1)[0]
-        self.logger.log("<%s> %s" % (user, msg))
+        self.loghandles[channel].log("<%s> %s" % (user, msg))
 
         # Check to see if they're sending me a private message
         if channel == self.nickname:
@@ -93,7 +94,7 @@ class LogBot(irc.IRCClient):
         if msg.startswith(self.nickname + ":"):
             msg = "%s: view logs at https://logs.urbanairship.com/" % user
             self.msg(channel, msg)
-            self.logger.log("<%s> %s" % (self.nickname, msg))
+            self.loghandles[channel].log("<%s> %s" % (self.nickname, msg))
 
     def action(self, user, channel, msg):
         """This will get called when the bot sees someone do an action."""
@@ -108,7 +109,6 @@ class LogBot(irc.IRCClient):
         new_nick = params[0]
         self.logger.log("%s is now known as %s" % (old_nick, new_nick))
 
-
     # For fun, override the method that determines how a nickname is changed on
     # collisions. The default method appends an underscore.
     def alterCollidedNick(self, nickname):
@@ -117,7 +117,6 @@ class LogBot(irc.IRCClient):
         effort to create an unused related name for subsequent registration.
         """
         return nickname + '^'
-
 
 
 class LogBotFactory(protocol.ClientFactory):
@@ -129,9 +128,16 @@ class LogBotFactory(protocol.ClientFactory):
     # the class of the protocol to build when new connection is made
     protocol = LogBot
 
-    def __init__(self, channel):
-        self.channel = channel
-        self.filename = "logs/%s.log" % (channel,)
+    def __init__(self, channels):
+        """Create a bot that listens on a set of channels.
+
+        channels: list of str, names of channels to join
+        """
+        self.channels = channels
+        self.filenames = {} # Probably redundant.
+        self.loghandles = {}
+        for channel in channels:
+            self.filenames[channel] = "logs/%s.log" % (channel,)
 
     def clientConnectionLost(self, connector, reason):
         """If we get disconnected, reconnect to server."""
@@ -143,19 +149,13 @@ class LogBotFactory(protocol.ClientFactory):
 
 
 def main():
-    # initialize logging
     log.startLogging(sys.stdout)
 
-    # create factory protocol and application
-    #f = LogBotFactory(sys.argv[1], sys.argv[2])
-    # TODO: pass a list of challens directly into one (and only one) factory.
     channels = sys.argv[1].split()
-    logbots = []
-    for chan in channels:
-        logbots.append(LogBotFactory(chan))
-
+    # create factory protocol and application
+    bot = LogBotFactory(channels)
     # connect factory to this host and port
-    [reactor.connectTCP("localhost", 6667, f) for f in logbots]
+    reactor.connectTCP("localhost", 6667, bot)
 
     # run bot
     reactor.run()
